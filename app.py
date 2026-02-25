@@ -168,7 +168,12 @@ def load_data():
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r') as f:
-                sctr_data = json.load(f)
+                data = json.load(f)
+                # Handle both list format and object format
+                if isinstance(data, list):
+                    sctr_data = {'last_updated': None, 'stocks': data}
+                else:
+                    sctr_data = data
     except Exception as e:
         logger.error(f"Error loading data: {e}")
 
