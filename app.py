@@ -18,65 +18,74 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Configuration
 SCTR_URL = "https://stockcharts.com/freecharts/sctr.html"
 DATA_FILE = "sctr_data.json"
 TAIWAN_TIMEZONE = timezone(timedelta(hours=8))
 
-# Global data storage
 sctr_data = {"last_updated": None, "stocks": []}
 is_updating = False
 
 def get_google_sheets_client():
-    """Initialize Google Sheets client"""
     try:
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        credentials = ServiceAccountCredentials.from_json_keyfile_name(
-            'google_credentials.json', scope
-        )
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        credentials = ServiceAccountCredentials.from_json_keyfile_name('google_credentials.json', scope)
         return gspread.authorize(credentials)
     except Exception as e:
         logger.error(f"Failed to initialize Google Sheets: {e}")
         return None
 
 def scrape_sctr():
-    """Scrape SCTR rankings from StockCharts using requests"""
     stocks = []
     
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        }
-        
-        response = requests.get(SCTR_URL, headers=headers, timeout=30)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, 'lxml')
-        
-        # Find table rows
-        rows = soup.select('table tbody tr')
-        logger.info(f"Found {len(rows)} rows")
-        
-        for row in rows:
-            cells = row.find_all('td')
-            if len(cells) >= 6:
-                try:
+        # Try Playwright first
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(SCTR_URL, wait_until="networkidle", timeout=60000)
+                page.wait_for_selector("table tbody tr", timeout=30000)
+                
+                rows = page.query_selector_all("table tbody tr")
+                logger.info(f"Found {len(rows)} rows with Playwright")
+                
+                for row in rows:
+                    cells = row.query_selector_all("td")
+                    if len(cells) >= 6:
+                        symbol = cells[1].inner_text().strip()
+                        sctr_text = cells[5].inner_text().strip()
+                        if symbol and sctr_text:
+                            try:
+                                sctr_value = float(sctr_text)
+                                if 0 <= sctr_value <= 100:
+                                    stocks.append({'symbol': symbol, 'sctr': sctr_value})
+                            except:
+                                continue
+                
+                browser.close()
+                
+        except Exception as playwright_err:
+            logger.warning(f"Playwright failed: {playwright_err}, trying requests fallback")
+            
+            # Fallback: simple requests
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(SCTR_URL, headers=headers, timeout=30)
+            soup = BeautifulSoup(response.content, 'lxml')
+            
+            rows = soup.select('table tbody tr')
+            for row in rows[:300]:
+                cells = row.find_all('td')
+                if len(cells) >= 6:
                     symbol = cells[1].get_text(strip=True)
                     sctr_text = cells[5].get_text(strip=True)
-                    
-                    if symbol and sctr_text:
-                        try:
-                            sctr_value = float(sctr_text)
-                            if 0 <= sctr_value <= 100:
-                                stocks.append({'symbol': symbol, 'sctr': sctr_value})
-                        except ValueError:
-                            continue
-                except Exception:
-                    continue
+                    try:
+                        sctr = float(sctr_text)
+                        if 0 <= sctr <= 100:
+                            stocks.append({'symbol': symbol, 'sctr': sctr})
+                    except:
+                        continue
         
         stocks.sort(key=lambda x: x['sctr'], reverse=True)
         logger.info(f"Scraped {len(stocks)} stocks")
@@ -143,7 +152,7 @@ def export_to_google_sheets(stocks_data):
         try:
             worksheet = spreadsheet.sheet1
         except:
-            worksheet = spreadsheet.add_worksheet("SCTR Rankings", rows=1000, cols=10)
+            worksheet= spreadsheet.add_worksheet("SCTR Rankings", rows=1000, cols=10)
         
         headers = ['Symbol', 'SCTR', 'Price', 'Change', 'Change %', 'Volume', 'Market Cap', 'PE Ratio', 'Day High', 'Day Low']
         worksheet.clear()
@@ -188,9 +197,7 @@ def update_sctr_data_background():
 @app.route('/')
 def index():
     load_data()
-    return render_template('index.html', 
-                          data=sctr_data['stocks'], 
-                          last_updated=sctr_data.get('last_updated'))
+    return render_template('index.html', data=sctr_data['stocks'], last_updated=sctr_data.get('last_updated'))
 
 @app.route('/api/data')
 def api_data():
