@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 SCTR_URL = "https://stockcharts.com/freecharts/sctr.html"
+SCRAPER_API = os.environ.get("SCRAPER_API_KEY", "")  # Optional: use scraper API if available
 DATA_FILE = "sctr_data.json"
 TAIWAN_TIMEZONE = timezone(timedelta(hours=8))
 
@@ -37,8 +38,38 @@ def get_google_sheets_client():
 def scrape_sctr():
     stocks = []
     
+def scrape_sctr():
+    stocks = []
+    
     try:
-        # Try Playwright first
+        # Method 1: Try Jina AI Reader API (free, handles JS rendering)
+        try:
+            jina_url = f"https://r.jina.ai/http://stockcharts.com/freecharts/sctr.html"
+            response = requests.get(jina_url, timeout=30)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'lxml')
+                # Try to find table data
+                rows = soup.select('table tbody tr')
+                if len(rows) > 5:
+                    logger.info(f"Found {len(rows)} rows with Jina AI")
+                    for row in rows:
+                        cells = row.find_all('td')
+                        if len(cells) >= 6:
+                            symbol = cells[1].get_text(strip=True)
+                            sctr_text = cells[5].get_text(strip=True)
+                            try:
+                                sctr = float(sctr_text)
+                                if 0 <= sctr <= 100:
+                                    stocks.append({'symbol': symbol, 'sctr': sctr})
+                            except:
+                                continue
+                    if stocks:
+                        stocks.sort(key=lambda x: x['sctr'], reverse=True)
+                        return stocks[:300]
+        except Exception as jina_err:
+            logger.warning(f"Jina AI failed: {jina_err}")
+        
+        # Method 2: Try Playwright (if available)
         try:
             from playwright.sync_api import sync_playwright
             
@@ -67,9 +98,10 @@ def scrape_sctr():
                 browser.close()
                 
         except Exception as playwright_err:
-            logger.warning(f"Playwright failed: {playwright_err}, trying requests fallback")
-            
-            # Fallback: simple requests
+            logger.warning(f"Playwright failed: {playwright_err}")
+        
+        # Method 3: Simple requests fallback
+        if not stocks:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             response = requests.get(SCTR_URL, headers=headers, timeout=30)
             soup = BeautifulSoup(response.content, 'lxml')
