@@ -4,8 +4,7 @@
     "builder": "NIXPACKS",
     "nixpacksConfig": {
       "python": "3.11",
-      "install": ["pip install -r requirements.txt", "playwright install chromium", "playwright install-deps"],
-      "aptPackages": ["chromium", "chromium-driver", "libglib2.0-0", "libnss3", "libgbm1", "fonts-liberation", "libappindicator3-1", "libasound2", "libatk-bridge2.0-0", "libatk1.0-0", "libatspi2.0-0", " libcups2", "libdbus-1-3", "libdrm2", "libgbm1", "libgtk-3-0", "libxcomposite1", "libxdamage1", "libxfixes3", "libxkbcommon0", "libxrandr2", "xdg-utils"]
+      "install": ["pip install -r requirements.txt"]
     }
   },
   "deploy": {
