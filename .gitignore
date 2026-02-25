@@ -23,7 +23,6 @@ env/
 Thumbs.db
 
 # Project specific
-sctr_data.json
 google_credentials.json
 *.log
 
