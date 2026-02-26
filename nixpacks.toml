@@ -1,0 +1,4 @@
+# Force start command so PORT is read from env via gunicorn_config.py
+# (avoids Railway/dashboard overriding with literal $PORT)
+[start]
+cmd = "gunicorn --config gunicorn_config.py app:app"
