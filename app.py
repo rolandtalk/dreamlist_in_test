@@ -184,6 +184,45 @@ def _fetch_yahoo_chart_direct(symbol, session):
         logger.debug(f"Yahoo chart direct {symbol}: {e}")
         return None
 
+def _fetch_chart_2mo(symbol, session=None):
+    """Fetch ~2 months of daily chart: timestamps and closes. Returns (timestamps, closes) or (None, None)."""
+    session = session or YF_SESSION
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=2mo&interval=1d"
+    try:
+        r = session.get(url, timeout=15)
+        if r.status_code != 200:
+            return None, None
+        data = r.json()
+        chart = data.get("chart") or data
+        result_list = chart.get("result")
+        if not result_list:
+            return None, None
+        result = result_list[0]
+        ts = result.get("timestamp") or []
+        indicators = result.get("indicators") or {}
+        quote_list = indicators.get("quote")
+        if not quote_list:
+            return None, None
+        quote = quote_list[0] if isinstance(quote_list, list) else quote_list
+        raw = quote.get("close") or []
+        closes = [float(c) if c is not None else None for c in raw]
+        if not ts or len(closes) < 2:
+            return None, None
+        return ts, closes
+    except Exception as e:
+        logger.debug(f"Chart 2mo {symbol}: {e}")
+        return None, None
+
+def _ma3(closes):
+    """3-day simple moving average; first two values are None."""
+    out = [None, None]
+    for i in range(2, len(closes)):
+        if closes[i] is not None and closes[i-1] is not None and closes[i-2] is not None:
+            out.append(round((closes[i] + closes[i-1] + closes[i-2]) / 3, 2))
+        else:
+            out.append(None)
+    return out
+
 def calculate_performance_and_rsi(symbol, session=None):
     """Compute 1D/5D/20D/60D % change, RSI(14), price, sector. Uses direct Yahoo API first (reliable), then yfinance."""
     session = session or YF_SESSION
@@ -418,6 +457,25 @@ def api_stock_detail(symbol):
     yf_data = calculate_yfinance_data(symbol)
     return jsonify({'symbol': symbol, **yf_data})
 
+@app.route('/api/chart/<symbol>')
+def api_chart(symbol):
+    """Return ~2 months of daily close, MA3, and dates for the symbol pop-up chart."""
+    session = YF_SESSION
+    ts, closes = _fetch_chart_2mo(symbol, session)
+    if not ts or not closes or len(closes) < 2:
+        return jsonify({'error': 'No chart data', 'dates': [], 'prices': [], 'ma3': []}), 404
+    dates = [datetime.utcfromtimestamp(t).strftime('%Y-%m-%d') for t in ts]
+    prices = [round(float(c), 2) if c is not None else None for c in closes]
+    ma3 = _ma3(prices)
+    current_price = prices[-1] if prices else None
+    return jsonify({
+        'symbol': symbol,
+        'dates': dates,
+        'prices': prices,
+        'ma3': ma3,
+        'current_price': current_price,
+    })
+
 @app.route('/api/status')
 def api_status():
     return jsonify({'is_updating': is_updating})
@@ -444,5 +502,5 @@ if __name__ == '__main__':
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     
-    port = int(os.environ.get('PORT', 5001))
+    port = int(os.environ.get('PORT', 5002))
     app.run(host='0.0.0.0', port=port)
