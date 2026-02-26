@@ -117,7 +117,9 @@
         .table-row-mean, .table-row-std { font-weight: 600; background: rgba(0,0,0,0.15); }
         .positive { color: #00ff88; }
         .negative { color: #ff4757; }
-        .rank-sym { font-weight: 600; color: #00d4ff; }
+        .rank-sym { font-weight: 600; color: #00d4ff; display: inline-flex; align-items: baseline; gap: 10px; }
+        .rank-sym .rank-num { font-size: 0.7em; opacity: 0.92; }
+        .rank-sym .rank-sym-ticker { }
         .pagination { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
         .pagination button { padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #fff; cursor: pointer; }
         .pagination button:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
@@ -336,7 +338,7 @@
                 const r20 = stock.perf_20d != null ? pctClass(stock.perf_20d) : '';
                 const r60 = stock.perf_60d != null ? pctClass(stock.perf_60d) : '';
                 return `<div class="table-row">
-                    <div class="rank-sym">${stock.rank || '-'} ${stock.symbol || '-'}</div>
+                    <div class="rank-sym"><span class="rank-num">${stock.rank || '-'}</span><span class="rank-sym-ticker">${stock.symbol || '-'}</span></div>
                     <div class="${r1}">${fmtPct(stock.perf_1d)}</div>
                     <div class="${r5}">${fmtPct(stock.perf_5d)}</div>
                     <div class="${r20}">${fmtPct(stock.perf_20d)}</div>
