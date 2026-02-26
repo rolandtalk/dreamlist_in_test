@@ -71,7 +71,7 @@
         .ref-table .ref-header { font-weight: 600; color: rgba(255,255,255,0.6); }
         .section-title {
             display: flex;
-            justify-content: flex-start;
+            justify-content: space-between;
             align-items: center;
             margin-bottom: 12px;
             flex-wrap: wrap;
@@ -148,9 +148,16 @@
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
         .section-title .export-csv-btn { white-space: nowrap; }
         @media (max-width: 768px) {
-            .ref-table { grid-template-columns: 44px 48px 48px 48px 48px; gap: 4px; font-size: 11px; padding: 8px 10px; }
-            .table-header-grid { grid-template-columns: 60px 48px 48px 48px 48px 52px; gap: 4px; font-size: 11px; }
-            .table-row, .table-row-mean, .table-row-std { grid-template-columns: 60px 48px 48px 48px 48px 52px; gap: 4px; font-size: 11px; padding: 6px 10px; }
+            .container { padding: 14px; }
+            body { font-size: 15px; }
+            .pagination-info { font-size: 15px; }
+            .ref-table { grid-template-columns: 52px 56px 56px 56px 56px; gap: 6px; font-size: 14px; padding: 10px 12px; }
+            .section-title h2 { font-size: 18px; }
+            .section-title .export-csv-btn { font-size: 15px; padding: 10px 14px; }
+            .table-header { font-size: 13px; padding: 10px 12px; }
+            .table-header-grid { grid-template-columns: 68px 54px 54px 54px 54px 58px; gap: 6px; font-size: 13px; }
+            .table-row, .table-row-mean, .table-row-std { grid-template-columns: 68px 54px 54px 54px 54px 58px; gap: 6px; font-size: 14px; padding: 8px 12px; }
+            .pagination button { font-size: 15px; padding: 8px 14px; }
         }
     </style>
 </head>
@@ -194,11 +201,11 @@
         </div>
 
         <div class="section-title">
+            <h2>Performance</h2>
             <a href="/api/export" download="dreamlist_300.csv" class="btn btn-primary export-csv-btn" onclick="showToast('CSV download started');">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
                 Export to CSV
             </a>
-            <h2>Performance</h2>
         </div>
 
         <div class="mean-std-wrap">
