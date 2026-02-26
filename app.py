@@ -17,6 +17,7 @@ import threading
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 app = Flask(__name__)
 
@@ -25,15 +26,30 @@ SCRAPER_API = os.environ.get("SCRAPER_API_KEY", "")  # Optional: use scraper API
 DATA_FILE = "sctr_data.json"
 TAIWAN_TIMEZONE = timezone(timedelta(hours=8))
 
-sctr_data = {"last_updated": None, "stocks": []}
+sctr_data = {"last_updated": None, "ref_qqq": {}, "stocks": []}
 is_updating = False
+cancel_update = False
+
+# Session for yfinance: use curl_cffi browser impersonation if available (avoids Yahoo block)
+def _make_yf_session():
+    try:
+        from curl_cffi import requests as curl_requests
+        s = curl_requests.Session(impersonate="chrome")
+        logger.info("Using curl_cffi (Chrome) for Yahoo Finance")
+        return s
+    except Exception as e:
+        logger.warning(f"curl_cffi not available ({e}), using requests with User-Agent")
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        })
+        return s
+
+YF_SESSION = _make_yf_session()
 
 def scrape_sctr():
     stocks = []
-    
-def scrape_sctr():
-    stocks = []
-    
     try:
         # Method 1: Try Jina AI Reader API (free, handles JS rendering)
         try:
@@ -120,6 +136,114 @@ def scrape_sctr():
         logger.error(f"Error scraping SCTR: {e}")
         return []
 
+def _pct_change(current, past):
+    """Return percent change from past to current, or None if invalid."""
+    if past is None or past == 0 or current is None:
+        return None
+    return round((float(current) - float(past)) / float(past) * 100, 2)
+
+def _rsi_14(closes):
+    """Compute RSI(14) from list of closes (oldest first). Needs at least 15 closes."""
+    if not closes or len(closes) < 15:
+        return None
+    closes = [float(c) for c in closes]
+    gains, losses = [], []
+    for i in range(1, 15):
+        ch = closes[-15 + i] - closes[-15 + i - 1]
+        gains.append(ch if ch > 0 else 0)
+        losses.append(-ch if ch < 0 else 0)
+    avg_gain = sum(gains) / 14
+    avg_loss = sum(losses) / 14
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 1)
+
+def _fetch_yahoo_chart_direct(symbol, session):
+    """Fetch chart data from Yahoo Finance public API. Returns list of closes or None."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=3mo&interval=1d"
+    try:
+        r = session.get(url, timeout=15)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        chart = data.get("chart") or data
+        result_list = chart.get("result")
+        if not result_list:
+            return None
+        result = result_list[0]
+        indicators = result.get("indicators") or {}
+        quote_list = indicators.get("quote")
+        if not quote_list:
+            return None
+        quote = quote_list[0] if isinstance(quote_list, list) else quote_list
+        raw = quote.get("close") or []
+        closes = [float(c) for c in raw if c is not None]
+        return closes if len(closes) >= 2 else None
+    except Exception as e:
+        logger.debug(f"Yahoo chart direct {symbol}: {e}")
+        return None
+
+def calculate_performance_and_rsi(symbol, session=None):
+    """Compute 1D/5D/20D/60D % change, RSI(14), price, sector. Uses direct Yahoo API first (reliable), then yfinance."""
+    session = session or YF_SESSION
+    closes = None
+    sector = ""
+
+    # 1) Direct Yahoo Chart API first (works when yfinance is blocked)
+    closes = _fetch_yahoo_chart_direct(symbol, session)
+
+    # 2) Fallback: yfinance for history + sector
+    if not closes or len(closes) < 2:
+        try:
+            ticker = yf.Ticker(symbol, session=session)
+            hist = ticker.history(period="80d")
+            if hist is not None and len(hist) >= 2:
+                closes = hist["Close"].tolist()
+            if not closes or len(closes) < 2:
+                return {}
+            info = ticker.info
+            sector = (info.get("sector") or "").strip() if info else ""
+        except Exception:
+            return {}
+
+    if not closes or len(closes) < 2:
+        return {}
+
+    c_now = float(closes[-1])
+    perf_1d = _pct_change(c_now, closes[-2]) if len(closes) >= 2 else None
+    perf_5d = _pct_change(c_now, closes[-6]) if len(closes) >= 6 else None
+    perf_20d = _pct_change(c_now, closes[-21]) if len(closes) >= 21 else None
+    perf_60d = _pct_change(c_now, closes[-61]) if len(closes) >= 61 else None
+    rsi_14 = _rsi_14(closes)
+    return {
+        "perf_1d": perf_1d,
+        "perf_5d": perf_5d,
+        "perf_20d": perf_20d,
+        "perf_60d": perf_60d,
+        "rsi_14": rsi_14,
+        "price": c_now,
+        "sector": sector,
+    }
+
+def get_qqq_ref():
+    """Get QQQ reference row: 1D, 5D, 20D, 60D. Safe when yfinance fails (e.g. rate limit)."""
+    for attempt in range(2):
+        try:
+            data = calculate_performance_and_rsi("QQQ", session=YF_SESSION)
+            if data:
+                return {
+                    "ref": "QQQ",
+                    "perf_1d": data.get("perf_1d"),
+                    "perf_5d": data.get("perf_5d"),
+                    "perf_20d": data.get("perf_20d"),
+                    "perf_60d": data.get("perf_60d"),
+                }
+        except Exception as e:
+            logger.warning(f"QQQ ref attempt {attempt + 1} failed: {e}")
+        time.sleep(1)
+    return {"ref": "QQQ", "perf_1d": None, "perf_5d": None, "perf_20d": None, "perf_60d": None}
+
 def calculate_yfinance_data(symbol):
     try:
         ticker = yf.Ticker(symbol)
@@ -139,11 +263,40 @@ def calculate_yfinance_data(symbol):
     except:
         return {}
 
+# Delay between YFinance calls to avoid Yahoo rate limiting (empty/JSON errors)
+YFINANCE_DELAY_SEC = float(os.environ.get("YFINANCE_DELAY", "0.5"))
+# Cap number of stocks to enrich (0 = no limit). Use e.g. 50 for faster test runs.
+ENRICH_LIMIT = int(os.environ.get("ENRICH_LIMIT", "0")) or None
+
 def enrich_data_with_yfinance(stocks):
+    """Enrich stocks with 1D/5D/20D/60D and RSI(14). Stops if cancel_update is set."""
+    global cancel_update
+    to_process = stocks[:ENRICH_LIMIT] if ENRICH_LIMIT else stocks
+    if ENRICH_LIMIT and len(stocks) > ENRICH_LIMIT:
+        logger.info(f"Enriching first {ENRICH_LIMIT} of {len(stocks)} stocks (set ENRICH_LIMIT=0 for all)")
     enriched = []
-    for stock in stocks[:50]:
-        yf_data = calculate_yfinance_data(stock['symbol'])
-        enriched.append({'symbol': stock['symbol'], 'sctr': stock['sctr'], **yf_data})
+    for i, stock in enumerate(to_process):
+        if cancel_update:
+            logger.info(f"Update cancelled after {i} stocks")
+            break
+        perf = calculate_performance_and_rsi(stock["symbol"], session=YF_SESSION)
+        if YFINANCE_DELAY_SEC > 0:
+            time.sleep(YFINANCE_DELAY_SEC)
+        row = {
+            "rank": i + 1,
+            "symbol": stock["symbol"],
+            "sctr": stock["sctr"],
+            "perf_1d": perf.get("perf_1d"),
+            "perf_5d": perf.get("perf_5d"),
+            "perf_20d": perf.get("perf_20d"),
+            "perf_60d": perf.get("perf_60d"),
+            "rsi_14": perf.get("rsi_14"),
+            "price": perf.get("price"),
+            "sector": perf.get("sector") or "",
+        }
+        enriched.append(row)
+        if (i + 1) % 50 == 0:
+            logger.info(f"Enriched {i + 1}/{len(stocks)} stocks")
     return enriched
 
 def save_data():
@@ -160,56 +313,76 @@ def load_data():
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
-                # Handle both list format and object format
                 if isinstance(data, list):
-                    sctr_data = {'last_updated': None, 'stocks': data}
+                    sctr_data = {'last_updated': None, 'ref_qqq': {}, 'stocks': data}
                 else:
                     sctr_data = data
+                    if 'ref_qqq' not in sctr_data:
+                        sctr_data['ref_qqq'] = {}
+        else:
+            sctr_data = {'last_updated': None, 'ref_qqq': {}, 'stocks': []}
     except Exception as e:
         logger.error(f"Error loading data: {e}")
 
 def export_to_csv(stocks_data):
-    """Generate CSV string from stocks data."""
+    """Generate CSV: RNK, SYM, 1D, 5D, 20D, 60D, RSI(14D), SCTR, Price, Sector."""
     output = io.StringIO()
     writer = csv.writer(output)
-    headers = ['Symbol', 'SCTR', 'Price', 'Change', 'Change %', 'Volume', 'Market Cap', 'PE Ratio', 'Day High', 'Day Low']
+    headers = ['RNK', 'SYM', '1D', '5D', '20D', '60D', 'RSI(14D)', 'SCTR', 'Price', 'Sector']
     writer.writerow(headers)
     for stock in stocks_data:
+        price = stock.get('price')
         row = [
-            stock.get('symbol', ''), stock.get('sctr', ''), stock.get('price', ''),
-            stock.get('change', ''), stock.get('change_percent', ''), stock.get('volume', ''),
-            stock.get('market_cap', ''), stock.get('pe_ratio', ''), stock.get('day_high', ''), stock.get('day_low', '')
+            stock.get('rank', ''),
+            stock.get('symbol', ''),
+            stock.get('perf_1d') if stock.get('perf_1d') is not None else '',
+            stock.get('perf_5d') if stock.get('perf_5d') is not None else '',
+            stock.get('perf_20d') if stock.get('perf_20d') is not None else '',
+            stock.get('perf_60d') if stock.get('perf_60d') is not None else '',
+            stock.get('rsi_14') if stock.get('rsi_14') is not None else '',
+            stock.get('sctr', ''),
+            round(price, 2) if price is not None else '',
+            stock.get('sector', '') or '',
         ]
         writer.writerow(row)
     return output.getvalue()
 
 def update_sctr_data_background():
-    global sctr_data, is_updating
+    global sctr_data, is_updating, cancel_update
     is_updating = True
-    
+    cancel_update = False
     try:
         logger.info("Starting SCTR data update...")
         stocks = scrape_sctr()
-        
+        if cancel_update:
+            logger.info("Update cancelled before enrich")
+            return
         if stocks:
+            ref_qqq = get_qqq_ref()
+            if cancel_update:
+                logger.info("Update cancelled after QQQ")
+                return
             enriched_stocks = enrich_data_with_yfinance(stocks)
-            sctr_data = {
-                'last_updated': datetime.now(TAIWAN_TIMEZONE).isoformat(),
-                'stocks': enriched_stocks
-            }
-            save_data()
-            logger.info(f"SCTR data updated: {len(enriched_stocks)} stocks")
+            if enriched_stocks:
+                sctr_data = {
+                    'last_updated': datetime.now(TAIWAN_TIMEZONE).isoformat(),
+                    'ref_qqq': ref_qqq,
+                    'stocks': enriched_stocks
+                }
+                save_data()
+                logger.info(f"SCTR data updated: {len(enriched_stocks)} stocks")
         else:
             logger.error("Failed to scrape SCTR data")
     except Exception as e:
         logger.error(f"Update error: {e}")
     finally:
         is_updating = False
+        cancel_update = False
 
 @app.route('/')
 def index():
     load_data()
-    return render_template('index.html', data=sctr_data['stocks'], last_updated=sctr_data.get('last_updated'))
+    return render_template('index.html', data=sctr_data['stocks'], last_updated=sctr_data.get('last_updated'), ref_qqq=sctr_data.get('ref_qqq') or {})
 
 @app.route('/api/data')
 def api_data():
@@ -237,7 +410,7 @@ def api_export():
     return Response(
         csv_content,
         mimetype='text/csv',
-        headers={'Content-Disposition': 'attachment; filename="sctr_rankings.csv"'}
+        headers={'Content-Disposition': 'attachment; filename="dreamlist_300.csv"'}
     )
 
 @app.route('/api/stock/<symbol>')
@@ -248,6 +421,12 @@ def api_stock_detail(symbol):
 @app.route('/api/status')
 def api_status():
     return jsonify({'is_updating': is_updating})
+
+@app.route('/api/update/cancel', methods=['POST'])
+def api_update_cancel():
+    global cancel_update
+    cancel_update = True
+    return jsonify({'status': 'ok', 'message': 'Update cancel requested'})
 
 def run_scheduler():
     def job():
@@ -265,5 +444,5 @@ if __name__ == '__main__':
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 5001))
     app.run(host='0.0.0.0', port=port)
