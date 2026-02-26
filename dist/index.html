@@ -278,15 +278,15 @@
                     </svg>
                     Update
                 </button>
-                <button class="btn btn-primary" onclick="exportToSheets()">
+                <a id="exportCsvLink" href="/api/export" download="sctr_rankings.csv" class="btn btn-primary" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center;gap:6px;" onclick="showToast('CSV download started');">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
                         <polyline points="14,2 14,8 20,8"/>
                         <line x1="12" y1="18" x2="12" y2="12"/>
                         <line x1="9" y1="15" x2="15" y2="15"/>
                     </svg>
-                    Export to Sheets
-                </button>
+                    Export to CSV
+                </a>
             </div>
         </header>
 
@@ -467,37 +467,6 @@
                         <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
                     </svg>
                     Update
-                `;
-            }
-        }
-
-        async function exportToSheets() {
-            const btn = document.querySelector('.btn-primary');
-            btn.disabled = true;
-            btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;margin:0;"></div> Exporting...';
-            
-            try {
-                const response = await fetch('/api/export', { method: 'POST' });
-                const result = await response.json();
-                
-                if (result.status === 'success') {
-                    showToast(result.message);
-                } else {
-                    showToast(result.message || 'Failed to export', true);
-                }
-            } catch (error) {
-                console.log('Export not available');
-                showToast('Google Sheets export requires backend - see README', true);
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = `
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                        <polyline points="14,2 14,8 20,8"/>
-                        <line x1="12" y1="18" x2="12" y2="12"/>
-                        <line x1="9" y1="15" x2="15" y2="15"/>
-                    </svg>
-                    Export to Sheets
                 `;
             }
         }

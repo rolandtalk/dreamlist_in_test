@@ -2,14 +2,14 @@
 # Version: 1.0.5
 import os
 import json
+import csv
+import io
 import logging
 from datetime import datetime, timezone, timedelta
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response
 import yfinance as yf
 import requests
 from bs4 import BeautifulSoup
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import schedule
 import time
 import threading
@@ -27,15 +27,6 @@ TAIWAN_TIMEZONE = timezone(timedelta(hours=8))
 
 sctr_data = {"last_updated": None, "stocks": []}
 is_updating = False
-
-def get_google_sheets_client():
-    try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        credentials = ServiceAccountCredentials.from_json_keyfile_name('google_credentials.json', scope)
-        return gspread.authorize(credentials)
-    except Exception as e:
-        logger.error(f"Failed to initialize Google Sheets: {e}")
-        return None
 
 def scrape_sctr():
     stocks = []
@@ -177,38 +168,20 @@ def load_data():
     except Exception as e:
         logger.error(f"Error loading data: {e}")
 
-def export_to_google_sheets(stocks_data):
-    try:
-        client = get_google_sheets_client()
-        if not client:
-            return False, "Google Sheets client not available"
-        
-        try:
-            spreadsheet = client.open("SCTR Rankings")
-        except gspread.SpreadsheetNotFound:
-            spreadsheet = client.create("SCTR Rankings")
-        
-        try:
-            worksheet = spreadsheet.sheet1
-        except:
-            worksheet= spreadsheet.add_worksheet("SCTR Rankings", rows=1000, cols=10)
-        
-        headers = ['Symbol', 'SCTR', 'Price', 'Change', 'Change %', 'Volume', 'Market Cap', 'PE Ratio', 'Day High', 'Day Low']
-        worksheet.clear()
-        worksheet.append_row(headers)
-        
-        for stock in stocks_data:
-            row = [
-                stock.get('symbol', ''), stock.get('sctr', ''), stock.get('price', ''),
-                stock.get('change', ''), stock.get('change_percent', ''), stock.get('volume', ''),
-                stock.get('market_cap', ''), stock.get('pe_ratio', ''), stock.get('day_high', ''), stock.get('day_low', '')
-            ]
-            worksheet.append_row(row)
-        
-        return True, f"Exported {len(stocks_data)} stocks to Google Sheets"
-    except Exception as e:
-        logger.error(f"Error exporting to Google Sheets: {e}")
-        return False, str(e)
+def export_to_csv(stocks_data):
+    """Generate CSV string from stocks data."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    headers = ['Symbol', 'SCTR', 'Price', 'Change', 'Change %', 'Volume', 'Market Cap', 'PE Ratio', 'Day High', 'Day Low']
+    writer.writerow(headers)
+    for stock in stocks_data:
+        row = [
+            stock.get('symbol', ''), stock.get('sctr', ''), stock.get('price', ''),
+            stock.get('change', ''), stock.get('change_percent', ''), stock.get('volume', ''),
+            stock.get('market_cap', ''), stock.get('pe_ratio', ''), stock.get('day_high', ''), stock.get('day_low', '')
+        ]
+        writer.writerow(row)
+    return output.getvalue()
 
 def update_sctr_data_background():
     global sctr_data, is_updating
@@ -256,14 +229,16 @@ def api_update():
     
     return jsonify({'status': 'success', 'message': 'Update started in background'})
 
-@app.route('/api/export', methods=['POST'])
+@app.route('/api/export')
 def api_export():
+    """Export SCTR data as CSV file download."""
     load_data()
-    success, message = export_to_google_sheets(sctr_data['stocks'])
-    if success:
-        return jsonify({'status': 'success', 'message': message})
-    else:
-        return jsonify({'status': 'error', 'message': message}), 500
+    csv_content = export_to_csv(sctr_data['stocks'])
+    return Response(
+        csv_content,
+        mimetype='text/csv',
+        headers={'Content-Disposition': 'attachment; filename="sctr_rankings.csv"'}
+    )
 
 @app.route('/api/stock/<symbol>')
 def api_stock_detail(symbol):
