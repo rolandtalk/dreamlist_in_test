@@ -60,22 +60,22 @@
         .pagination-info { color: rgba(255,255,255,0.7); font-size: 14px; }
         .ref-table {
             display: grid;
-            grid-template-columns: 60px 80px 80px 80px 80px;
-            gap: 8px;
-            padding: 12px 16px;
+            grid-template-columns: 48px 56px 56px 56px 56px;
+            gap: 6px;
+            padding: 10px 12px;
             background: rgba(0,0,0,0.2);
             border-radius: 12px;
             margin-bottom: 16px;
-            font-size: 14px;
+            font-size: 13px;
         }
         .ref-table .ref-header { font-weight: 600; color: rgba(255,255,255,0.6); }
         .section-title {
             display: flex;
-            justify-content: space-between;
+            justify-content: flex-start;
             align-items: center;
             margin-bottom: 12px;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 12px;
         }
         .section-title h2 { font-size: 16px; font-weight: 600; color: rgba(255,255,255,0.9); }
         .mean-std-wrap { margin-bottom: 12px; background: rgba(255,255,255,0.05); border-radius: 12px; overflow: hidden; }
@@ -85,34 +85,33 @@
         .table-header {
             display: flex;
             align-items: center;
-            gap: 16px;
-            padding: 10px 16px;
+            gap: 12px;
+            padding: 8px 12px;
             background: rgba(0,0,0,0.25);
             font-weight: 600;
             color: rgba(255,255,255,0.7);
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            font-size: 14px;
+            font-size: 12px;
         }
         .table-header-grid {
             display: grid;
-            grid-template-columns: 90px 80px 80px 80px 80px 90px;
-            gap: 8px;
+            grid-template-columns: 72px 56px 56px 56px 56px 64px;
+            gap: 6px;
             align-items: center;
             flex: 0 0 auto;
         }
         .table-row, .table-row-mean, .table-row-std {
             display: grid;
-            grid-template-columns: 90px 80px 80px 80px 80px 90px;
-            gap: 8px;
-            padding: 10px 16px;
+            grid-template-columns: 72px 56px 56px 56px 56px 64px;
+            gap: 6px;
+            padding: 8px 12px;
             align-items: center;
-            font-size: 14px;
+            font-size: 13px;
         }
         .table-header-grid > div { text-align: left; cursor: pointer; user-select: none; }
         .table-header-grid > div:hover { color: #00d4ff; }
-        .table-header .sort-icon { margin-left: 4px; opacity: 0.6; }
-        .table-header .export-csv-btn { flex-shrink: 0; white-space: nowrap; }
+        .table-header .sort-icon { margin-left: 2px; opacity: 0.6; }
         .table-row { border-bottom: 1px solid rgba(255,255,255,0.05); }
         .table-row:hover { background: rgba(255,255,255,0.05); }
         .table-row-mean, .table-row-std { font-weight: 600; background: rgba(0,0,0,0.15); }
@@ -147,10 +146,11 @@
         }
         #lastUpdated.updated-just-now { animation: pulse 1.5s ease; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+        .section-title .export-csv-btn { white-space: nowrap; }
         @media (max-width: 768px) {
-            .ref-table { grid-template-columns: 50px 60px 60px 60px 60px; font-size: 12px; }
-            .table-header-grid { grid-template-columns: 70px 60px 60px 60px 60px 70px; }
-            .table-row, .table-row-mean, .table-row-std { grid-template-columns: 70px 60px 60px 60px 60px 70px; font-size: 12px; }
+            .ref-table { grid-template-columns: 44px 48px 48px 48px 48px; gap: 4px; font-size: 11px; padding: 8px 10px; }
+            .table-header-grid { grid-template-columns: 60px 48px 48px 48px 48px 52px; gap: 4px; font-size: 11px; }
+            .table-row, .table-row-mean, .table-row-std { grid-template-columns: 60px 48px 48px 48px 48px 52px; gap: 4px; font-size: 11px; padding: 6px 10px; }
         }
     </style>
 </head>
@@ -194,7 +194,11 @@
         </div>
 
         <div class="section-title">
-            <h2>Performance (1D / 5D / 20D / 60D)</h2>
+            <a href="/api/export" download="dreamlist_300.csv" class="btn btn-primary export-csv-btn" onclick="showToast('CSV download started');">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                Export to CSV
+            </a>
+            <h2>Performance</h2>
         </div>
 
         <div class="mean-std-wrap">
@@ -226,10 +230,6 @@
                     <div role="columnheader" data-sort="perf_60d">60D <span class="sort-icon">↕</span></div>
                     <div role="columnheader" data-sort="rsi_14">RSI (14D) <span class="sort-icon">↕</span></div>
                 </div>
-                <a href="/api/export" download="dreamlist_300.csv" class="btn btn-primary export-csv-btn" onclick="showToast('CSV download started');">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-                    Export to CSV
-                </a>
             </div>
             <div id="tableBody">
                 <div class="loading"><div class="loading-spinner"></div>Loading data...</div>
@@ -257,7 +257,7 @@
         function fmtPct(val) {
             if (val === null || val === undefined) return '-';
             const sign = val >= 0 ? '+' : '';
-            return sign + Number(val).toFixed(2) + '%';
+            return sign + Number(val).toFixed(1) + '%';
         }
         function pctClass(val) {
             if (val === null || val === undefined) return '';
@@ -298,10 +298,10 @@
             document.getElementById('mean20d').textContent = fmtPct(mean(rows, 'perf_20d'));
             document.getElementById('mean60d').textContent = fmtPct(mean(rows, 'perf_60d'));
             document.getElementById('meanRsi').textContent = mean(rows, 'rsi_14') != null ? mean(rows, 'rsi_14').toFixed(1) : '-';
-            document.getElementById('std1d').textContent = std(rows, 'perf_1d') != null ? std(rows, 'perf_1d').toFixed(2) + '%' : '-';
-            document.getElementById('std5d').textContent = std(rows, 'perf_5d') != null ? std(rows, 'perf_5d').toFixed(2) + '%' : '-';
-            document.getElementById('std20d').textContent = std(rows, 'perf_20d') != null ? std(rows, 'perf_20d').toFixed(2) + '%' : '-';
-            document.getElementById('std60d').textContent = std(rows, 'perf_60d') != null ? std(rows, 'perf_60d').toFixed(2) + '%' : '-';
+            document.getElementById('std1d').textContent = std(rows, 'perf_1d') != null ? std(rows, 'perf_1d').toFixed(1) + '%' : '-';
+            document.getElementById('std5d').textContent = std(rows, 'perf_5d') != null ? std(rows, 'perf_5d').toFixed(1) + '%' : '-';
+            document.getElementById('std20d').textContent = std(rows, 'perf_20d') != null ? std(rows, 'perf_20d').toFixed(1) + '%' : '-';
+            document.getElementById('std60d').textContent = std(rows, 'perf_60d') != null ? std(rows, 'perf_60d').toFixed(1) + '%' : '-';
             document.getElementById('stdRsi').textContent = std(rows, 'rsi_14') != null ? std(rows, 'rsi_14').toFixed(1) : '-';
         }
 
