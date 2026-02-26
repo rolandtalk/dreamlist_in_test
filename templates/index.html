@@ -110,9 +110,13 @@
             align-items: center;
             font-size: 13px;
         }
-        .table-header-grid > div { text-align: left; cursor: pointer; user-select: none; }
-        .table-header-grid > div:hover { color: #00d4ff; }
+        .table-header-grid > div { text-align: left; user-select: none; }
+        .table-header-grid .sortable-label { cursor: pointer; }
+        .table-header-grid .sortable-label:hover { color: #00d4ff; }
+        .table-header-grid > div[data-sort].active { color: #00d4ff; }
         .table-header .sort-icon { margin-left: 2px; opacity: 0.6; }
+        .rank-sym-header { display: flex; align-items: center; gap: 10px; }
+        .rank-sym-header .sortable-label.active { color: #00d4ff; }
         .table-row { border-bottom: 1px solid rgba(255,255,255,0.05); }
         .table-row:hover { background: rgba(255,255,255,0.05); }
         .table-row-mean, .table-row-std { font-weight: 600; background: rgba(0,0,0,0.15); }
@@ -274,7 +278,10 @@
         <div class="table-wrap">
             <div class="table-header" id="tableHead" role="row">
                 <div class="table-header-grid">
-                    <div role="columnheader" data-sort="rank">RNK/SYM <span class="sort-icon">↕</span></div>
+                    <div class="rank-sym-header" role="columnheader">
+                        <span data-sort="rank" class="sortable-label">RNK <span class="sort-icon">↕</span></span>
+                        <span data-sort="symbol" class="sortable-label">SYM <span class="sort-icon">↕</span></span>
+                    </div>
                     <div role="columnheader" data-sort="perf_1d">1D <span class="sort-icon">↕</span></div>
                     <div role="columnheader" data-sort="perf_5d">5D <span class="sort-icon">↕</span></div>
                     <div role="columnheader" data-sort="perf_20d">20D <span class="sort-icon">↕</span></div>
@@ -435,11 +442,20 @@
             if ((page * PAGE_SIZE) < total) { page++; renderTable(); }
         }
 
+        function updateSortHeaderActive() {
+            document.querySelectorAll('.rank-sym-header [data-sort]').forEach(function(el) {
+                el.classList.toggle('active', el.dataset.sort === sortKey);
+            });
+            document.querySelectorAll('.table-header-grid > div[data-sort]').forEach(function(el) {
+                el.classList.toggle('active', el.dataset.sort === sortKey);
+            });
+        }
         document.getElementById('tableHead').addEventListener('click', function(e) {
             const cell = e.target.closest('[data-sort]');
             if (!cell || !cell.dataset.sort) return;
             const key = cell.dataset.sort;
             if (sortKey === key) sortDir = -sortDir; else { sortKey = key; sortDir = 1; }
+            updateSortHeaderActive();
             renderTable();
         });
 
@@ -530,6 +546,7 @@
                 page = 1;
                 renderRefTable();
                 renderTable();
+                updateSortHeaderActive();
                 const lu = document.getElementById('lastUpdated'); if (lu) lu.textContent = data.last_updated ? new Date(data.last_updated).toLocaleString() : '-';
             } catch (e) {
                 console.error(e);
