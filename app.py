@@ -160,29 +160,36 @@ def _rsi_14(closes):
     return round(100 - (100 / (1 + rs)), 1)
 
 def _fetch_yahoo_chart_direct(symbol, session):
-    """Fetch chart data from Yahoo Finance public API. Returns list of closes or None."""
+    """Fetch chart data from Yahoo Finance public API. Returns (closes, live_price) or (None, None)."""
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=3mo&interval=1d"
     try:
         r = session.get(url, timeout=15)
         if r.status_code != 200:
-            return None
+            return None, None
         data = r.json()
         chart = data.get("chart") or data
         result_list = chart.get("result")
         if not result_list:
-            return None
+            return None, None
         result = result_list[0]
+        meta = result.get("meta") or {}
+        live_price = meta.get("regularMarketPrice")
+        if live_price is not None:
+            try:
+                live_price = float(live_price)
+            except (TypeError, ValueError):
+                live_price = None
         indicators = result.get("indicators") or {}
         quote_list = indicators.get("quote")
         if not quote_list:
-            return None
+            return None, None
         quote = quote_list[0] if isinstance(quote_list, list) else quote_list
         raw = quote.get("close") or []
         closes = [float(c) for c in raw if c is not None]
-        return closes if len(closes) >= 2 else None
+        return (closes, live_price) if len(closes) >= 2 else (None, None)
     except Exception as e:
         logger.debug(f"Yahoo chart direct {symbol}: {e}")
-        return None
+        return None, None
 
 def _fetch_chart_2mo(symbol, session=None):
     """Fetch ~2 months of daily chart: timestamps and closes. Returns (timestamps, closes) or (None, None)."""
@@ -227,10 +234,11 @@ def calculate_performance_and_rsi(symbol, session=None):
     """Compute 1D/5D/20D/60D % change, RSI(14), price, sector. Uses direct Yahoo API first (reliable), then yfinance."""
     session = session or YF_SESSION
     closes = None
+    live_price = None
     sector = ""
 
     # 1) Direct Yahoo Chart API first (works when yfinance is blocked)
-    closes = _fetch_yahoo_chart_direct(symbol, session)
+    closes, live_price = _fetch_yahoo_chart_direct(symbol, session)
 
     # 2) Fallback: yfinance for history + sector
     if not closes or len(closes) < 2:
@@ -249,8 +257,17 @@ def calculate_performance_and_rsi(symbol, session=None):
     if not closes or len(closes) < 2:
         return {}
 
-    c_now = float(closes[-1])
-    perf_1d = _pct_change(c_now, closes[-2]) if len(closes) >= 2 else None
+    # Use live price from meta.regularMarketPrice when available so 1D matches last trade vs previous close
+    c_now = float(live_price) if live_price is not None else float(closes[-1])
+    last_bar = float(closes[-1])
+
+    if live_price is not None and abs(c_now - last_bar) > 0.001:
+        # Live price differs from last daily bar: use last bar as previous close for 1D
+        prev_close_for_1d = last_bar
+    else:
+        prev_close_for_1d = closes[-2] if len(closes) >= 2 else None
+
+    perf_1d = _pct_change(c_now, prev_close_for_1d)
     perf_5d = _pct_change(c_now, closes[-6]) if len(closes) >= 6 else None
     perf_20d = _pct_change(c_now, closes[-21]) if len(closes) >= 21 else None
     perf_60d = _pct_change(c_now, closes[-61]) if len(closes) >= 61 else None
