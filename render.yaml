@@ -1,0 +1,9 @@
+# Render.com: connect repo at dashboard.render.com → New → Web Service
+# Or use Blueprint: New Blueprint Instance → connect this repo
+services:
+  - type: web
+    name: dreamlist-300
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --config gunicorn_config.py app:app

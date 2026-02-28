@@ -220,6 +220,7 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
                     Update
                 </button>
+                <button class="btn btn-secondary" id="btnRefreshPrices" onclick="refreshPrices()">Refresh prices</button>
                 <button class="btn btn-secondary" id="btnCancelUpdate" style="display:none;" onclick="cancelUpdate()">Cancel update</button>
             </div>
         </header>
@@ -336,6 +337,13 @@
         let sortDir = 1;
         let page = 1;
         const PAGE_SIZE = 50;
+
+        // Server-rendered data: use for initial paint so table is correct even if fetch is cached
+        const __INITIAL__ = {
+            stocks: {{ data | tojson }},
+            last_updated: {{ (last_updated or '') | tojson }},
+            ref_qqq: {{ ref_qqq | tojson }}
+        };
 
         function fmtPct(val) {
             if (val === null || val === undefined) return '-';
@@ -540,7 +548,7 @@
 
         async function loadData() {
             try {
-                const res = await fetch('/api/data');
+                const res = await fetch('/api/data?t=' + Date.now());
                 const data = await res.json();
                 stockData = (data.stocks || []).map((s, i) => ({ ...s, rank: s.rank != null ? s.rank : i + 1 }));
                 refQqq = data.ref_qqq || {};
@@ -560,6 +568,8 @@
             document.getElementById('btnUpdate').style.display = '';
             document.getElementById('btnUpdate').disabled = false;
             document.getElementById('btnUpdate').innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> Update';
+            const rp = document.getElementById('btnRefreshPrices');
+            if (rp) { rp.style.display = ''; rp.disabled = false; }
             document.getElementById('btnCancelUpdate').style.display = 'none';
             document.getElementById('updateStatusBanner').style.display = 'none';
         }
@@ -588,26 +598,17 @@
             const btn = document.getElementById('btnUpdate');
             btn.disabled = true;
             btn.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;margin:0;"></span> Updating...';
+            const rp = document.getElementById('btnRefreshPrices');
+            if (rp) rp.disabled = true;
             document.getElementById('btnCancelUpdate').style.display = '';
             document.getElementById('updateStatusBanner').style.display = 'block';
+            document.getElementById('updateStatusBanner').textContent = 'Update in progress… This can take a few minutes. The table will refresh automatically when done.';
             try {
                 const res = await fetch('/api/update', { method: 'POST' });
                 const result = await res.json();
                 if (result.status === 'success') {
                     showToast('Update started. Table will refresh automatically when done.');
-                    const check = setInterval(async () => {
-                        const s = await fetch('/api/status');
-                        const d = await s.json();
-                        if (!d.is_updating) {
-                            clearInterval(check);
-                            showUpdateButton();
-                            await loadData();
-                            showToast('Update complete. Table refreshed with latest data.');
-                            const lu = document.getElementById('lastUpdated');
-                            if (lu) { lu.classList.add('updated-just-now'); setTimeout(() => lu.classList.remove('updated-just-now'), 1500); }
-                        }
-                    }, 2500);
-                    setTimeout(() => clearInterval(check), 600000);
+                    pollUntilDone();
                 } else {
                     showToast(result.message || 'Update failed', true);
                     showUpdateButton();
@@ -618,7 +619,60 @@
             }
         }
 
-        document.addEventListener('DOMContentLoaded', loadData);
+        async function refreshPrices() {
+            const btn = document.getElementById('btnRefreshPrices');
+            if (btn) btn.disabled = true;
+            document.getElementById('btnUpdate').disabled = true;
+            document.getElementById('btnCancelUpdate').style.display = '';
+            document.getElementById('updateStatusBanner').style.display = 'block';
+            document.getElementById('updateStatusBanner').textContent = 'Refreshing prices (close only)… Table will refresh when done.';
+            try {
+                const res = await fetch('/api/refresh_prices', { method: 'POST' });
+                const result = await res.json();
+                if (result.status === 'success') {
+                    showToast('Refresh prices started. Table will refresh when done.');
+                    pollUntilDone();
+                } else {
+                    showToast(result.message || 'Refresh failed', true);
+                    showUpdateButton();
+                }
+            } catch (e) {
+                showToast('Refresh failed', true);
+                showUpdateButton();
+            }
+        }
+
+        function pollUntilDone() {
+            const check = setInterval(async () => {
+                const s = await fetch('/api/status');
+                const d = await s.json();
+                if (!d.is_updating) {
+                    clearInterval(check);
+                    showUpdateButton();
+                    await loadData();
+                    showToast('Done. Table refreshed.');
+                    const lu = document.getElementById('lastUpdated');
+                    if (lu) { lu.classList.add('updated-just-now'); setTimeout(() => lu.classList.remove('updated-just-now'), 1500); }
+                }
+            }, 2500);
+            setTimeout(() => clearInterval(check), 600000);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            if (__INITIAL__ && __INITIAL__.stocks && __INITIAL__.stocks.length) {
+                stockData = __INITIAL__.stocks.map((s, i) => ({ ...s, rank: s.rank != null ? s.rank : i + 1 }));
+                refQqq = __INITIAL__.ref_qqq || {};
+                filteredData = stockData.slice();
+                page = 1;
+                renderRefTable();
+                renderTable();
+                updateSortHeaderActive();
+                const lu = document.getElementById('lastUpdated');
+                if (lu) lu.textContent = __INITIAL__.last_updated ? new Date(__INITIAL__.last_updated).toLocaleString() : '-';
+            } else {
+                loadData();
+            }
+        });
     </script>
 </body>
 </html>

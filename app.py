@@ -6,7 +6,7 @@ import csv
 import io
 import logging
 from datetime import datetime, timezone, timedelta
-from flask import Flask, render_template, jsonify, request, Response
+from flask import Flask, render_template, jsonify, request, Response, make_response
 import yfinance as yf
 import requests
 from bs4 import BeautifulSoup
@@ -23,7 +23,11 @@ app = Flask(__name__)
 
 SCTR_URL = "https://stockcharts.com/freecharts/sctr.html"
 SCRAPER_API = os.environ.get("SCRAPER_API_KEY", "")  # Optional: use scraper API if available
-DATA_FILE = "sctr_data.json"
+# Use path next to this file so the app always uses the same data regardless of cwd.
+# Override with env DREAMLIST_DATA_FILE to force a specific file (e.g. full path to your sctr_data.json).
+_DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.environ.get("DREAMLIST_DATA_FILE") or os.path.join(_DATA_DIR, "sctr_data.json")
+logger.info("Data file: %s", DATA_FILE)
 TAIWAN_TIMEZONE = timezone(timedelta(hours=8))
 
 sctr_data = {"last_updated": None, "ref_qqq": {}, "stocks": []}
@@ -56,7 +60,7 @@ def scrape_sctr():
             jina_url = f"https://r.jina.ai/http://stockcharts.com/freecharts/sctr.html"
             response = requests.get(jina_url, timeout=30)
             if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'lxml')
+                soup = BeautifulSoup(response.text, 'html.parser')
                 # Try to find table data
                 rows = soup.select('table tbody tr')
                 if len(rows) > 5:
@@ -113,7 +117,7 @@ def scrape_sctr():
         if not stocks:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             response = requests.get(SCTR_URL, headers=headers, timeout=30)
-            soup = BeautifulSoup(response.content, 'lxml')
+            soup = BeautifulSoup(response.content, 'html.parser')
             
             rows = soup.select('table tbody tr')
             for row in rows[:300]:
@@ -185,7 +189,23 @@ def _fetch_yahoo_chart_direct(symbol, session):
             return None, None
         quote = quote_list[0] if isinstance(quote_list, list) else quote_list
         raw = quote.get("close") or []
-        closes = [float(c) for c in raw if c is not None]
+        ts = result.get("timestamp") or []
+        # Align by index: last close = close at same index as last timestamp (official last trading day)
+        if ts and raw and len(ts) == len(raw):
+            for i in range(len(ts) - 1, -1, -1):
+                if raw[i] is not None:
+                    last_close_idx = i
+                    break
+            else:
+                last_close_idx = None
+        else:
+            last_close_idx = None
+        # Build closes list (drop nulls) for RSI and multi-day perf; ensure last element is official close when aligned
+        if last_close_idx is not None:
+            # Use only closes up to and including last_close_idx so closes[-1] is the official last trading day close
+            closes = [float(raw[j]) for j in range(last_close_idx + 1) if raw[j] is not None]
+        else:
+            closes = [float(c) for c in raw if c is not None]
         return (closes, live_price) if len(closes) >= 2 else (None, None)
     except Exception as e:
         logger.debug(f"Yahoo chart direct {symbol}: {e}")
@@ -257,15 +277,9 @@ def calculate_performance_and_rsi(symbol, session=None):
     if not closes or len(closes) < 2:
         return {}
 
-    # Use live price from meta.regularMarketPrice when available so 1D matches last trade vs previous close
-    c_now = float(live_price) if live_price is not None else float(closes[-1])
-    last_bar = float(closes[-1])
-
-    if live_price is not None and abs(c_now - last_bar) > 0.001:
-        # Live price differs from last daily bar: use last bar as previous close for 1D
-        prev_close_for_1d = last_bar
-    else:
-        prev_close_for_1d = closes[-2] if len(closes) >= 2 else None
+    # Use official session close only (no after-hours / regularMarketPrice)
+    c_now = float(closes[-1])
+    prev_close_for_1d = closes[-2] if len(closes) >= 2 else None
 
     perf_1d = _pct_change(c_now, prev_close_for_1d)
     perf_5d = _pct_change(c_now, closes[-6]) if len(closes) >= 6 else None
@@ -435,15 +449,53 @@ def update_sctr_data_background():
         is_updating = False
         cancel_update = False
 
+def refresh_prices_background():
+    """Re-fetch close prices for current symbol list (no scrape). Uses same is_updating/cancel_update."""
+    global sctr_data, is_updating, cancel_update
+    is_updating = True
+    cancel_update = False
+    try:
+        load_data()
+        stocks = sctr_data.get("stocks") or []
+        if not stocks:
+            logger.warning("Refresh prices: no stocks in cache, run Update first")
+            return
+        # Build list expected by enrich_data_with_yfinance: [{"symbol": ..., "sctr": ...}, ...]
+        to_enrich = [{"symbol": s["symbol"], "sctr": s["sctr"]} for s in stocks if isinstance(s, dict) and s.get("symbol")]
+        if not to_enrich:
+            return
+        logger.info("Refreshing prices for %d stocks (close only)...", len(to_enrich))
+        ref_qqq = get_qqq_ref()
+        if cancel_update:
+            return
+        enriched_stocks = enrich_data_with_yfinance(to_enrich)
+        if enriched_stocks:
+            sctr_data["last_updated"] = datetime.now(TAIWAN_TIMEZONE).isoformat()
+            sctr_data["ref_qqq"] = ref_qqq
+            sctr_data["stocks"] = enriched_stocks
+            save_data()
+            logger.info("Prices refreshed: %d stocks", len(enriched_stocks))
+    except Exception as e:
+        logger.error("Refresh prices error: %s", e)
+    finally:
+        is_updating = False
+        cancel_update = False
+
 @app.route('/')
 def index():
     load_data()
-    return render_template('index.html', data=sctr_data['stocks'], last_updated=sctr_data.get('last_updated'), ref_qqq=sctr_data.get('ref_qqq') or {})
+    resp = make_response(render_template('index.html', data=sctr_data['stocks'], last_updated=sctr_data.get('last_updated'), ref_qqq=sctr_data.get('ref_qqq') or {}))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
 
 @app.route('/api/data')
 def api_data():
     load_data()
-    return jsonify(sctr_data)
+    resp = jsonify(sctr_data)
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
 
 @app.route('/api/update', methods=['POST'])
 def api_update():
@@ -457,6 +509,17 @@ def api_update():
     thread.start()
     
     return jsonify({'status': 'success', 'message': 'Update started in background'})
+
+@app.route('/api/refresh_prices', methods=['POST'])
+def api_refresh_prices():
+    """Re-fetch close prices for current symbol list (no scrape). Same polling as Update."""
+    global is_updating
+    if is_updating:
+        return jsonify({'status': 'processing', 'message': 'Refresh already in progress'}), 202
+    thread = threading.Thread(target=refresh_prices_background)
+    thread.daemon = True
+    thread.start()
+    return jsonify({'status': 'success', 'message': 'Refresh prices started. Table will refresh when done.'})
 
 @app.route('/api/export')
 def api_export():
