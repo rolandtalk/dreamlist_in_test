@@ -1,5 +1,4 @@
-# Version: 1.0.5
-# Version: 1.0.5
+# Version: 1.0.6
 import os
 import json
 import csv
@@ -7,12 +6,13 @@ import io
 import logging
 from datetime import datetime, timezone, timedelta
 from flask import Flask, render_template, jsonify, request, Response, make_response
-import yfinance as yf
 import requests
 from bs4 import BeautifulSoup
 import schedule
 import time
 import threading
+import pandas as pd
+from pandas_datareader import data as pdr
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,23 +34,30 @@ sctr_data = {"last_updated": None, "ref_qqq": {}, "stocks": []}
 is_updating = False
 cancel_update = False
 
-# Session for yfinance: use curl_cffi browser impersonation if available (avoids Yahoo block)
-def _make_yf_session():
-    try:
-        from curl_cffi import requests as curl_requests
-        s = curl_requests.Session(impersonate="chrome")
-        logger.info("Using curl_cffi (Chrome) for Yahoo Finance")
+def _stooq_symbol(symbol):
+    """Stooq uses .US for US stocks. Leave symbols with a dot as-is (e.g. BRK.B -> BRK.B.US or keep)."""
+    s = (symbol or "").strip().upper()
+    if not s:
         return s
-    except Exception as e:
-        logger.warning(f"curl_cffi not available ({e}), using requests with User-Agent")
-        s = requests.Session()
-        s.headers.update({
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-        })
-        return s
+    return s if "." in s else f"{s}.US"
 
-YF_SESSION = _make_yf_session()
+def _fetch_stooq_history(symbol, days=90):
+    """Fetch daily OHLC from Stooq via pandas-datareader. Returns DataFrame with Date index and Close, or None."""
+    sym = _stooq_symbol(symbol)
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=max(days, 5))
+    try:
+        df = pdr.DataReader(sym, "stooq", start=start, end=end)
+        if df is None or df.empty or "Close" not in df.columns:
+            return None
+        df = df.sort_index(ascending=True)
+        df = df[~df["Close"].isna()]
+        if len(df) < 2:
+            return None
+        return df
+    except Exception as e:
+        logger.debug("Stooq %s: %s", symbol, e)
+        return None
 
 def scrape_sctr():
     stocks = []
@@ -163,82 +170,22 @@ def _rsi_14(closes):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 1)
 
-def _fetch_yahoo_chart_direct(symbol, session):
-    """Fetch chart data from Yahoo Finance public API. Returns (closes, live_price) or (None, None)."""
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=3mo&interval=1d"
-    try:
-        r = session.get(url, timeout=15)
-        if r.status_code != 200:
-            return None, None
-        data = r.json()
-        chart = data.get("chart") or data
-        result_list = chart.get("result")
-        if not result_list:
-            return None, None
-        result = result_list[0]
-        meta = result.get("meta") or {}
-        live_price = meta.get("regularMarketPrice")
-        if live_price is not None:
-            try:
-                live_price = float(live_price)
-            except (TypeError, ValueError):
-                live_price = None
-        indicators = result.get("indicators") or {}
-        quote_list = indicators.get("quote")
-        if not quote_list:
-            return None, None
-        quote = quote_list[0] if isinstance(quote_list, list) else quote_list
-        raw = quote.get("close") or []
-        ts = result.get("timestamp") or []
-        # Align by index: last close = close at same index as last timestamp (official last trading day)
-        if ts and raw and len(ts) == len(raw):
-            for i in range(len(ts) - 1, -1, -1):
-                if raw[i] is not None:
-                    last_close_idx = i
-                    break
-            else:
-                last_close_idx = None
-        else:
-            last_close_idx = None
-        # Build closes list (drop nulls) for RSI and multi-day perf; ensure last element is official close when aligned
-        if last_close_idx is not None:
-            # Use only closes up to and including last_close_idx so closes[-1] is the official last trading day close
-            closes = [float(raw[j]) for j in range(last_close_idx + 1) if raw[j] is not None]
-        else:
-            closes = [float(c) for c in raw if c is not None]
-        return (closes, live_price) if len(closes) >= 2 else (None, None)
-    except Exception as e:
-        logger.debug(f"Yahoo chart direct {symbol}: {e}")
+def _fetch_stooq_closes(symbol, days=90):
+    """Fetch daily closes from Stooq. Returns (list of closes, last_close) or (None, None). No live price; last_close is latest close."""
+    df = _fetch_stooq_history(symbol, days=days)
+    if df is None or len(df) < 2:
         return None, None
+    closes = df["Close"].astype(float).tolist()
+    return closes, float(closes[-1])
 
-def _fetch_chart_2mo(symbol, session=None):
-    """Fetch ~2 months of daily chart: timestamps and closes. Returns (timestamps, closes) or (None, None)."""
-    session = session or YF_SESSION
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=2mo&interval=1d"
-    try:
-        r = session.get(url, timeout=15)
-        if r.status_code != 200:
-            return None, None
-        data = r.json()
-        chart = data.get("chart") or data
-        result_list = chart.get("result")
-        if not result_list:
-            return None, None
-        result = result_list[0]
-        ts = result.get("timestamp") or []
-        indicators = result.get("indicators") or {}
-        quote_list = indicators.get("quote")
-        if not quote_list:
-            return None, None
-        quote = quote_list[0] if isinstance(quote_list, list) else quote_list
-        raw = quote.get("close") or []
-        closes = [float(c) if c is not None else None for c in raw]
-        if not ts or len(closes) < 2:
-            return None, None
-        return ts, closes
-    except Exception as e:
-        logger.debug(f"Chart 2mo {symbol}: {e}")
+def _fetch_chart_2mo(symbol):
+    """Fetch ~2 months of daily chart from Stooq. Returns (timestamps_epoch_sec, closes) or (None, None)."""
+    df = _fetch_stooq_history(symbol, days=70)
+    if df is None or len(df) < 2:
         return None, None
+    closes = [float(c) if pd.notna(c) else None for c in df["Close"]]
+    ts = [int(t.timestamp()) for t in df.index]
+    return ts, closes
 
 def _ma3(closes):
     """3-day simple moving average; first two values are None."""
@@ -250,35 +197,13 @@ def _ma3(closes):
             out.append(None)
     return out
 
-def calculate_performance_and_rsi(symbol, session=None):
-    """Compute 1D/5D/20D/60D % change, RSI(14), price, sector. Uses direct Yahoo API first (reliable), then yfinance."""
-    session = session or YF_SESSION
-    closes = None
-    live_price = None
-    sector = ""
-
-    # 1) Direct Yahoo Chart API first (works when yfinance is blocked)
-    closes, live_price = _fetch_yahoo_chart_direct(symbol, session)
-
-    # 2) Fallback: yfinance for history + sector
-    if not closes or len(closes) < 2:
-        try:
-            ticker = yf.Ticker(symbol, session=session)
-            hist = ticker.history(period="80d")
-            if hist is not None and len(hist) >= 2:
-                closes = hist["Close"].tolist()
-            if not closes or len(closes) < 2:
-                return {}
-            info = ticker.info
-            sector = (info.get("sector") or "").strip() if info else ""
-        except Exception:
-            return {}
-
-    if not closes or len(closes) < 2:
+def calculate_performance_and_rsi(symbol):
+    """Compute 1D/5D/20D/60D % change, RSI(14), price. Uses pandas-datareader + Stooq. Sector left empty."""
+    closes, last_close = _fetch_stooq_closes(symbol, days=90)
+    if not closes or len(closes) < 2 or last_close is None:
         return {}
 
-    # Use official session close only (no after-hours / regularMarketPrice)
-    c_now = float(closes[-1])
+    c_now = float(last_close)
     prev_close_for_1d = closes[-2] if len(closes) >= 2 else None
 
     perf_1d = _pct_change(c_now, prev_close_for_1d)
@@ -293,14 +218,14 @@ def calculate_performance_and_rsi(symbol, session=None):
         "perf_60d": perf_60d,
         "rsi_14": rsi_14,
         "price": c_now,
-        "sector": sector,
+        "sector": "",
     }
 
 def get_qqq_ref():
-    """Get QQQ reference row: 1D, 5D, 20D, 60D. Safe when yfinance fails (e.g. rate limit)."""
+    """Get QQQ reference row: 1D, 5D, 20D, 60D. Uses Stooq."""
     for attempt in range(2):
         try:
-            data = calculate_performance_and_rsi("QQQ", session=YF_SESSION)
+            data = calculate_performance_and_rsi("QQQ")
             if data:
                 return {
                     "ref": "QQQ",
@@ -310,48 +235,56 @@ def get_qqq_ref():
                     "perf_60d": data.get("perf_60d"),
                 }
         except Exception as e:
-            logger.warning(f"QQQ ref attempt {attempt + 1} failed: {e}")
+            logger.warning("QQQ ref attempt %s failed: %s", attempt + 1, e)
         time.sleep(1)
     return {"ref": "QQQ", "perf_1d": None, "perf_5d": None, "perf_20d": None, "perf_60d": None}
 
-def calculate_yfinance_data(symbol):
+def calculate_stooq_data(symbol):
+    """Return price, change, change_percent, volume from Stooq. Other fields (market_cap, PE, etc.) not provided by Stooq."""
     try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
+        df = _fetch_stooq_history(symbol, days=10)
+        if df is None or len(df) < 2:
+            return {}
+        close = df["Close"]
+        price = float(close.iloc[-1])
+        prev = float(close.iloc[-2])
+        change = price - prev
+        change_percent = (change / prev * 100) if prev else None
+        vol = df["Volume"].iloc[-1] if "Volume" in df.columns and pd.notna(df["Volume"].iloc[-1]) else None
         return {
-            'price': info.get('currentPrice') or info.get('regularMarketPrice'),
-            'change': info.get('regularMarketChange'),
-            'change_percent': info.get('regularMarketChangePercent'),
-            'volume': info.get('regularMarketVolume'),
-            'market_cap': info.get('marketCap'),
-            'pe_ratio': info.get('trailingPE'),
-            'day_high': info.get('dayHigh'),
-            'day_low': info.get('dayLow'),
-            'fifty_two_week_high': info.get('fiftyTwoWeekHigh'),
-            'fifty_two_week_low': info.get('fiftyTwoWeekLow')
+            "price": price,
+            "change": change,
+            "change_percent": change_percent,
+            "volume": int(vol) if vol is not None else None,
+            "market_cap": None,
+            "pe_ratio": None,
+            "day_high": None,
+            "day_low": None,
+            "fifty_two_week_high": None,
+            "fifty_two_week_low": None,
         }
-    except:
+    except Exception:
         return {}
 
-# Delay between YFinance calls to avoid Yahoo rate limiting (empty/JSON errors)
-YFINANCE_DELAY_SEC = float(os.environ.get("YFINANCE_DELAY", "0.5"))
+# Delay between Stooq calls to avoid rate limiting
+STOOQ_DELAY_SEC = float(os.environ.get("STOOQ_DELAY", os.environ.get("YFINANCE_DELAY", "0.3")))
 # Cap number of stocks to enrich (0 = no limit). Use e.g. 50 for faster test runs.
 ENRICH_LIMIT = int(os.environ.get("ENRICH_LIMIT", "0")) or None
 
 def enrich_data_with_yfinance(stocks):
-    """Enrich stocks with 1D/5D/20D/60D and RSI(14). Stops if cancel_update is set."""
+    """Enrich stocks with 1D/5D/20D/60D and RSI(14) via Stooq. Stops if cancel_update is set."""
     global cancel_update
     to_process = stocks[:ENRICH_LIMIT] if ENRICH_LIMIT else stocks
     if ENRICH_LIMIT and len(stocks) > ENRICH_LIMIT:
-        logger.info(f"Enriching first {ENRICH_LIMIT} of {len(stocks)} stocks (set ENRICH_LIMIT=0 for all)")
+        logger.info("Enriching first %s of %s stocks (set ENRICH_LIMIT=0 for all)", ENRICH_LIMIT, len(stocks))
     enriched = []
     for i, stock in enumerate(to_process):
         if cancel_update:
-            logger.info(f"Update cancelled after {i} stocks")
+            logger.info("Update cancelled after %s stocks", i)
             break
-        perf = calculate_performance_and_rsi(stock["symbol"], session=YF_SESSION)
-        if YFINANCE_DELAY_SEC > 0:
-            time.sleep(YFINANCE_DELAY_SEC)
+        perf = calculate_performance_and_rsi(stock["symbol"])
+        if STOOQ_DELAY_SEC > 0:
+            time.sleep(STOOQ_DELAY_SEC)
         row = {
             "rank": i + 1,
             "symbol": stock["symbol"],
@@ -535,14 +468,13 @@ def api_export():
 
 @app.route('/api/stock/<symbol>')
 def api_stock_detail(symbol):
-    yf_data = calculate_yfinance_data(symbol)
-    return jsonify({'symbol': symbol, **yf_data})
+    data = calculate_stooq_data(symbol)
+    return jsonify({'symbol': symbol, **data})
 
 @app.route('/api/chart/<symbol>')
 def api_chart(symbol):
-    """Return ~2 months of daily close, MA3, and dates for the symbol pop-up chart."""
-    session = YF_SESSION
-    ts, closes = _fetch_chart_2mo(symbol, session)
+    """Return ~2 months of daily close, MA3, and dates for the symbol pop-up chart (Stooq)."""
+    ts, closes = _fetch_chart_2mo(symbol)
     if not ts or not closes or len(closes) < 2:
         return jsonify({'error': 'No chart data', 'dates': [], 'prices': [], 'ma3': []}), 404
     dates = [datetime.utcfromtimestamp(t).strftime('%Y-%m-%d') for t in ts]
