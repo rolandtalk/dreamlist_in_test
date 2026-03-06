@@ -484,7 +484,7 @@ def refresh_prices_background():
 @app.route('/')
 def index():
     load_data()
-    resp = make_response(render_template('index.html', data=sctr_data['stocks'], last_updated=sctr_data.get('last_updated'), ref_qqq=sctr_data.get('ref_qqq') or {}))
+    resp = make_response(render_template('index.html', data=sctr_data['stocks'], last_updated=sctr_data.get('last_updated'), ref_qqq=sctr_data.get('ref_qqq') or {}, enrich_limit=ENRICH_LIMIT))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     resp.headers['Pragma'] = 'no-cache'
     return resp
@@ -492,7 +492,8 @@ def index():
 @app.route('/api/data')
 def api_data():
     load_data()
-    resp = jsonify(sctr_data)
+    out = {**sctr_data, 'enrich_limit': ENRICH_LIMIT}
+    resp = jsonify(out)
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     resp.headers['Pragma'] = 'no-cache'
     return resp

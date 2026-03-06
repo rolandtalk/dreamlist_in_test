@@ -78,6 +78,10 @@ On first deploy the table will be empty until you click **Update** or **Refresh 
 
 - **If the browser still shows old numbers**: use a new or incognito window, or hard-refresh (Ctrl+Shift+R). The first paint uses server-embedded data from the same file the server logged at startup.
 
+## Deploy (Railway)
+
+To show all ~300 stocks in production, set **ENRICH_LIMIT=0** (or leave it unset) in Railway → your web service → **Variables**; otherwise only the first N stocks are updated and shown.
+
 ## Cron Job
 
 The scraper runs automatically at 06:00 Taiwan time daily.

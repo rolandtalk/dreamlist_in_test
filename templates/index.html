@@ -154,6 +154,10 @@
             background: rgba(0,212,255,0.15); border: 1px solid rgba(0,212,255,0.4); color: #00d4ff;
             padding: 10px 16px; border-radius: 8px; margin-bottom: 12px; font-size: 14px;
         }
+        .enrich-limit-banner {
+            background: rgba(255,159,67,0.2); border: 1px solid rgba(255,159,67,0.5); color: #ff9f43;
+            padding: 10px 16px; border-radius: 8px; margin-bottom: 12px; font-size: 14px;
+        }
         #lastUpdated.updated-just-now { animation: pulse 1.5s ease; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
         .section-title .export-csv-btn { white-space: nowrap; }
@@ -228,6 +232,8 @@
         <div id="updateStatusBanner" class="update-status-banner" style="display:none;">
             Update in progress… This can take a few minutes. The table will refresh automatically when done.
         </div>
+
+        <div id="enrichLimitBanner" class="enrich-limit-banner" style="display:none;" role="alert"></div>
 
         <div class="filter-row">
             <span class="pagination-info" title="Data last refreshed"><strong>Last updated:</strong> <span id="lastUpdated">-</span></span>
@@ -558,6 +564,16 @@
                 renderTable();
                 updateSortHeaderActive();
                 const lu = document.getElementById('lastUpdated'); if (lu) lu.textContent = data.last_updated ? new Date(data.last_updated).toLocaleString() : '-';
+                const limitBanner = document.getElementById('enrichLimitBanner');
+                if (limitBanner) {
+                    const limit = data.enrich_limit;
+                    if (limit != null && limit > 0) {
+                        limitBanner.textContent = 'Showing first ' + limit + ' stocks only. Set ENRICH_LIMIT=0 in Railway Variables to update all 300.';
+                        limitBanner.style.display = 'block';
+                    } else {
+                        limitBanner.style.display = 'none';
+                    }
+                }
             } catch (e) {
                 console.error(e);
                 showToast('Failed to load data', true);
